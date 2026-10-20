@@ -1,0 +1,18 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: harborpay
+      POSTGRES_USER: harborpay
+      POSTGRES_PASSWORD: local_only_change_me
+    ports:
+      - "5432:5432"
+    volumes:
+      - harborpay_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U harborpay -d harborpay"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+volumes:
+  harborpay_pgdata:

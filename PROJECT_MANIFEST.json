@@ -1,0 +1,28 @@
+{
+  "project": "HarborPay",
+  "version": "0.1.0",
+  "generated_files": [
+    ".gitignore",
+    "README.md",
+    "database/schema.sql",
+    "database/seed.development.sql",
+    "docker-compose.yml",
+    "docs/ARCHITECTURE.md",
+    "package.json",
+    "server/.env.example",
+    "server/package.json",
+    "server/src/index.js",
+    "server/src/validation.js",
+    "server/test/validation.test.js",
+    "web/index.html",
+    "web/package.json",
+    "web/src/main.jsx",
+    "web/src/styles.css",
+    "web/vite.config.js"
+  ],
+  "limitations": [
+    "No real payments",
+    "No auth implementation",
+    "No synthetic account balances or transaction history"
+  ]
+}
