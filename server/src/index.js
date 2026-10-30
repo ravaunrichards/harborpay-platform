@@ -126,10 +126,20 @@ async function processPayPalEvent(database, event) {
 
   if (eventType === "CHECKOUT.ORDER.APPROVED") {
     if (resource.id) {
-      await database.from("payments")
+      const paymentId = resource.purchase_units?.[0]?.custom_id;
+      if (paymentId) {
+        const { error: linkError } = await database.from("payments")
+          .update({ provider_order_id: resource.id, status: "approved" })
+          .eq("id", paymentId)
+          .eq("status", "created");
+        if (linkError) throw httpError(503, "Approved PayPal order could not be linked to its payment record.");
+      }
+
+      const { error: updateError } = await database.from("payments")
         .update({ status: "approved" })
         .eq("provider_order_id", resource.id)
         .eq("status", "created");
+      if (updateError) throw httpError(503, "Approved PayPal order status could not be reconciled.");
     }
     return;
   }
@@ -212,16 +222,17 @@ async function processPayPalEvent(database, event) {
 app.post("/api/paypal/webhook", express.raw({ type: "application/json", limit: "256kb" }), asyncRoute(async (request, response) => {
   if (!Buffer.isBuffer(request.body)) throw httpError(400, "Invalid webhook body.");
 
+  const rawEventJson = request.body.toString("utf8");
   let event;
   try {
-    event = JSON.parse(request.body.toString("utf8"));
+    event = JSON.parse(rawEventJson);
   } catch {
     throw httpError(400, "Webhook body is not valid JSON.");
   }
 
   if (!event.id || !event.event_type) throw httpError(400, "Webhook event is missing required identifiers.");
 
-  const verified = await verifyPayPalWebhook(request.headers, event);
+  const verified = await verifyPayPalWebhook(request.headers, event, rawEventJson);
   if (!verified) throw httpError(400, "PayPal webhook signature verification failed.");
 
   const database = getDatabase();

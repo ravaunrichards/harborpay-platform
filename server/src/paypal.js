@@ -66,7 +66,7 @@ async function paypalRequest(method, path, body, requestId) {
   const response = await fetch(getPayPalBaseUrl() + path, {
     method,
     headers,
-    body: body === undefined ? undefined : JSON.stringify(body)
+    body: body === undefined ? undefined : (typeof body === "string" ? body : JSON.stringify(body))
   });
 
   const payload = await response.json().catch(() => ({}));
@@ -120,7 +120,7 @@ export async function capturePayPalOrder(orderId, paymentId) {
     "POST",
     "/v2/checkout/orders/" + encodeURIComponent(orderId) + "/capture",
     {},
-    paymentId + "-capture"
+    paymentId.replaceAll("-", "") + "C"
   );
 }
 
@@ -156,7 +156,7 @@ export async function createPayPalPayout({
   );
 }
 
-export async function verifyPayPalWebhook(headers, event) {
+export async function verifyPayPalWebhook(headers, event, rawEventJson) {
   if (!isPayPalWebhookConfigured()) {
     const error = new Error("PayPal webhook verification is not configured.");
     error.status = 503;
@@ -172,18 +172,25 @@ export async function verifyPayPalWebhook(headers, event) {
   ];
   if (requiredHeaders.some((name) => !headers[name])) return false;
 
+  if (typeof rawEventJson !== "string" || !rawEventJson.trim()) {
+    const error = new Error("The original PayPal webhook body is required for signature verification.");
+    error.status = 400;
+    throw error;
+  }
+
+  const verificationBody =
+    `{"auth_algo":${JSON.stringify(headers["paypal-auth-algo"])},` +
+    `"cert_url":${JSON.stringify(headers["paypal-cert-url"])},` +
+    `"transmission_id":${JSON.stringify(headers["paypal-transmission-id"])},` +
+    `"transmission_sig":${JSON.stringify(headers["paypal-transmission-sig"])},` +
+    `"transmission_time":${JSON.stringify(headers["paypal-transmission-time"])},` +
+    `"webhook_id":${JSON.stringify(process.env.PAYPAL_WEBHOOK_ID)},` +
+    `"webhook_event":${rawEventJson}}`;
+
   const verification = await paypalRequest(
     "POST",
     "/v1/notifications/verify-webhook-signature",
-    {
-      auth_algo: headers["paypal-auth-algo"],
-      cert_url: headers["paypal-cert-url"],
-      transmission_id: headers["paypal-transmission-id"],
-      transmission_sig: headers["paypal-transmission-sig"],
-      transmission_time: headers["paypal-transmission-time"],
-      webhook_id: process.env.PAYPAL_WEBHOOK_ID,
-      webhook_event: event
-    }
+    verificationBody
   );
 
   return verification.verification_status === "SUCCESS";

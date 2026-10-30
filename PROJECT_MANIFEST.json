@@ -1,0 +1,54 @@
+{
+  "project": "HarborPay",
+  "version": "1.0.0",
+  "status": "Provider integration implemented; merchant credentials and dedicated Supabase project still required for activation.",
+  "generated_files": [
+    ".gitignore",
+    "PROJECT_MANIFEST.json",
+    "README.md",
+    ".github/workflows/ci.yml",
+    "database/migrations/20261029000100_harborpay_core.sql",
+    "database/schema.sql",
+    "docker-compose.yml",
+    "docs/ARCHITECTURE.md",
+    "docs/OPERATIONS.md",
+    "package.json",
+    "server/.env.example",
+    "server/package.json",
+    "server/src/index.js",
+    "server/src/money.js",
+    "server/src/paypal.js",
+    "server/test/money.test.js",
+    "web/.env.example",
+    "web/index.html",
+    "web/package.json",
+    "web/src/lib/supabase.js",
+    "web/src/main.jsx",
+    "web/src/styles.css",
+    "web/vite.config.js"
+  ],
+  "integrations": [
+    "Supabase Auth",
+    "Supabase Postgres",
+    "PayPal Orders v2",
+    "PayPal capture",
+    "PayPal signature-verified webhooks",
+    "PayPal Payouts (administrator-only and disabled by default)"
+  ],
+  "removed_demo_components": [
+    "Sample Jamie Davis account",
+    "Development seed transaction/customer",
+    "Draft-only payment validation endpoint",
+    "Synthetic wallet and sample activity display"
+  ],
+  "activation_requirements": [
+    "Create and migrate a dedicated HarborPay Supabase project",
+    "Configure HarborPay Supabase Auth and transactional email",
+    "Configure PayPal Sandbox REST application credentials",
+    "Register the HarborPay PayPal webhook and store its webhook ID",
+    "Set server-only environment variables on the HarborPay API service",
+    "Complete the full Sandbox checkout and webhook verification checklist",
+    "Obtain PayPal Live and Payouts approvals before enabling real-money operations",
+    "Complete Jamaican regulatory/legal review before offering stored-value or money-transmission services"
+  ]
+}
