@@ -10,7 +10,7 @@ HarborPay is a payment application built around real provider transactions. The 
 - PayPal webhook signature verification and idempotent event storage.
 - A restricted server-side PayPal Payouts endpoint for authorized administrators.
 - A customer transaction history that reads only records belonging to the signed-in user.
-- Automated API tests and a production build check.
+- PostgreSQL migration/RLS/webhook tests, API tests, and a production build check.
 
 ## Important product boundary
 
@@ -22,8 +22,10 @@ A customer-held wallet, peer-to-peer stored balances, escrow, or redeemable e-mo
 
 - web/ — React customer application.
 - server/ — Express API, Supabase authentication, PayPal Orders, Payouts, and webhooks.
-- database/migrations/ — versioned Supabase database migration.
-- database/schema.sql — schema reference matching the migration.
+- database/migrations/ — versioned Supabase core and merchant-operations migrations.
+- database/schema.sql — complete schema reference matching both migrations.
+- database/tests/ — PostgreSQL schema, RLS, merchant ownership and webhook concurrency checks.
+- docs/DATABASE.md — table map and database security boundaries.
 - docs/ — architecture and deployment runbook.
 - .github/workflows/ — CI checks.
 
@@ -32,7 +34,7 @@ A customer-held wallet, peer-to-peer stored balances, escrow, or redeemable e-mo
 Requirements: Node.js 20 or newer and npm.
 
 1. Create a separate Supabase project for HarborPay. Do not reuse a database belonging to another application.
-2. Run database/migrations/20261029000100_harborpay_core.sql in the HarborPay Supabase SQL editor.
+2. Run both migrations in order in the HarborPay Supabase SQL editor: 20261029000100_harborpay_core.sql, then 20261030000200_harborpay_merchant_operations.sql.
 3. Create a PayPal REST application in the PayPal Developer Dashboard. Start with Sandbox credentials.
 4. Copy server/.env.example to server/.env and fill in the server-only secrets.
 5. Copy web/.env.example to web/.env.local and set the public Supabase URL/key and API URL.

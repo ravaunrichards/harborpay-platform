@@ -4,7 +4,7 @@
 
 Create a new Supabase project named HarborPay for this repository. Do not reuse Zovara or another application's project.
 
-In the HarborPay project, run database/migrations/20261029000100_harborpay_core.sql. Enable Email/Password authentication and configure the production email sender and authentication redirect URLs in Supabase. Use the HarborPay web origin as an allowed redirect origin.
+In the HarborPay project, run these migrations in order: database/migrations/20261029000100_harborpay_core.sql, then database/migrations/20261030000200_harborpay_merchant_operations.sql. The second migration adds merchants/team permissions, customers, orders, payment links, refunds, disputes, payment-status history, API keys, outbound webhooks, audit events, and atomic inbound-webhook claims. Run database/verify.sql and the Supabase security/performance advisors after both migrations. Enable Email/Password authentication and configure the production email sender and authentication redirect URLs in Supabase. Use the HarborPay web origin as an allowed redirect origin.
 
 The web application needs the project URL and a publishable/anon key. The API needs the same project URL and the service-role key. The service-role key is secret and belongs only in the HarborPay API environment.
 

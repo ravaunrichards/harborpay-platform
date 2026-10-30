@@ -1,7 +1,7 @@
 {
   "project": "HarborPay",
   "version": "1.0.0",
-  "status": "Provider integration implemented; merchant credentials and dedicated Supabase project still required for activation.",
+  "status": "Expanded database migrations and schema verification are in GitHub; the isolated live HarborPay database still requires dedicated provider provisioning.",
   "generated_files": [
     ".gitignore",
     "PROJECT_MANIFEST.json",
@@ -25,7 +25,12 @@
     "web/src/lib/supabase.js",
     "web/src/main.jsx",
     "web/src/styles.css",
-    "web/vite.config.js"
+    "web/vite.config.js",
+    "database/migrations/20261030000200_harborpay_merchant_operations.sql",
+    "database/tests/supabase_bootstrap.sql",
+    "database/tests/verify_schema.sql",
+    "database/verify.sql",
+    "docs/DATABASE.md"
   ],
   "integrations": [
     "Supabase Auth",
