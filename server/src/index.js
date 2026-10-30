@@ -236,36 +236,47 @@ app.post("/api/paypal/webhook", express.raw({ type: "application/json", limit: "
   if (!verified) throw httpError(400, "PayPal webhook signature verification failed.");
 
   const database = getDatabase();
-  const { error: insertError } = await database.from("webhook_events").insert({
-    provider_event_id: event.id,
-    event_type: event.event_type,
-    payload: event
-  });
-
-  if (insertError && insertError.code !== "23505") {
-    throw httpError(503, "Verified webhook could not be recorded. PayPal may retry delivery.");
-  }
-
-  if (insertError?.code === "23505") {
-    const { data: existing, error: lookupError } = await database.from("webhook_events")
-      .select("processed_at")
-      .eq("provider_event_id", event.id)
-      .maybeSingle();
-
-    if (lookupError) throw httpError(503, "Webhook reconciliation status could not be checked.");
-    if (existing?.processed_at) {
-      return response.status(200).json({ received: true, duplicate: true });
+  const workerId = randomUUID();
+  const { data: claimState, error: claimError } = await database.rpc(
+    "harborpay_claim_webhook_event",
+    {
+      p_provider_event_id: event.id,
+      p_event_type: event.event_type,
+      p_payload: event,
+      p_worker_id: workerId
     }
+  );
+
+  if (claimError) {
+    throw httpError(503, "Verified webhook could not be claimed for processing. PayPal may retry delivery.");
+  }
+  if (claimState === "processed") {
+    return response.status(200).json({ received: true, duplicate: true });
+  }
+  if (claimState !== "claimed") {
+    throw httpError(503, "This webhook is already being processed. PayPal should retry delivery.");
   }
 
-  await processPayPalEvent(database, event);
+  try {
+    await processPayPalEvent(database, event);
+    const { data: completed, error: completionError } = await database.rpc(
+      "harborpay_complete_webhook_event",
+      {
+        p_provider_event_id: event.id,
+        p_worker_id: workerId
+      }
+    );
 
-  const { error: processedError } = await database.from("webhook_events")
-    .update({ processed_at: new Date().toISOString() })
-    .eq("provider_event_id", event.id);
-
-  if (processedError) {
-    throw httpError(503, "Webhook was received but its processing marker could not be saved.");
+    if (completionError || completed !== true) {
+      throw httpError(503, "Webhook was processed but its completion marker could not be saved.");
+    }
+  } catch (error) {
+    await database.rpc("harborpay_release_webhook_event", {
+      p_provider_event_id: event.id,
+      p_worker_id: workerId,
+      p_error: String(error?.message || "Unknown processing error").slice(0, 1000)
+    });
+    throw error;
   }
 
   response.status(200).json({ received: true });
