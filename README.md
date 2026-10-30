@@ -1,48 +1,61 @@
-# HarborPay — Digital Wallet Platform
+# HarborPay
 
-HarborPay is an original, PayPal-inspired wallet application scaffold. It is not affiliated with or endorsed by PayPal. It must not use PayPal branding to imply official status.
+HarborPay is a payment application built around real provider transactions. The repository no longer contains sample customer accounts, sample balances, or seeded transaction activity.
 
-## Included
-- Responsive React web dashboard with sample wallet balance, activity history, quick actions, and payment-draft validation.
-- Express API with health, wallet summary, transaction sample endpoints, and recipient/amount validation.
-- PostgreSQL starter schema and development seed.
-- Automated Node.js unit tests.
-- Docker Compose for local PostgreSQL development.
+## What the application implements
 
-## Safety and truthfulness
-This project does **not** move real money. The dashboard does not invent a balance or transaction history: those remain unconnected/empty until a real account backend is implemented. Payment form submission validates a draft only. Production payments require provider integration, authenticated users, secure server-side processing, verified webhooks, fraud controls, and compliance review. Never store raw card numbers, CVVs, passwords, or provider secrets in source control.
+- Supabase Auth for customer registration, login, and authenticated API requests.
+- Supabase Postgres records for payment orders, provider capture references, payout records, and verified webhook events.
+- PayPal Orders v2 checkout created and captured by the server, never by browser-side secret calls.
+- PayPal webhook signature verification and idempotent event storage.
+- A restricted server-side PayPal Payouts endpoint for authorized administrators.
+- A customer transaction history that reads only records belonging to the signed-in user.
+- Automated API tests and a production build check.
 
-## Requirements
-- Node.js 20+ and npm
-- Docker (optional)
+## Important product boundary
 
-## Run locally
-```bash
-npm install
-npm run install:all
-npm run dev
-```
-Open `http://localhost:5173`. API: `http://localhost:4000`.
+This release is a PayPal checkout and controlled-disbursement integration. It does **not** claim to be a licensed stored-value wallet, does not hold customer funds in an internal HarborPay balance, and does not display a pretend available balance. Checkout payments settle to the merchant's PayPal account. Payouts are disbursements from that merchant account and are disabled until the PayPal account has Payouts access and an administrator explicitly enables the feature.
 
-Alternatively, install separately with `cd server && npm install && npm run dev` and `cd web && npm install && npm run dev` in separate terminals.
+A customer-held wallet, peer-to-peer stored balances, escrow, or redeemable e-money must not be switched on merely by adding a database column. Get the required Jamaican regulatory advice, authorization, and regulated banking/payment partner arrangements before offering those services. See the Bank of Jamaica references in docs/OPERATIONS.md.
 
-Copy `server/.env.example` to `server/.env` before customising server settings. The sample endpoints work without a database connection; the SQL schema is a starting point, not yet connected to the running API.
+## Repository layout
 
-## Project tree
-```text
-harborpay-platform/
-├── web/                 # React + Vite client
-├── server/              # Express API and tests
-├── database/            # PostgreSQL schema + dev seed
-├── docs/                # Architecture and production checklist
-├── docker-compose.yml
-└── package.json
-```
+- web/ — React customer application.
+- server/ — Express API, Supabase authentication, PayPal Orders, Payouts, and webhooks.
+- database/migrations/ — versioned Supabase database migration.
+- database/schema.sql — schema reference matching the migration.
+- docs/ — architecture and deployment runbook.
+- .github/workflows/ — CI checks.
 
-## Production milestones
-1. Add a maintained identity provider and secure session management.
-2. Persist users, wallets, payment requests, and an immutable double-entry ledger in PostgreSQL.
-3. Integrate a payment provider using hosted checkout/tokenization.
-4. Verify signed webhooks, deduplicate events, and reconcile settlement/refunds.
-5. Add authorization checks, rate limiting, audit logging, monitoring, backups, and security review.
-6. Test the payment-provider sandbox, accessibility, mobile browsers, and migrations before production release.
+## Local setup
+
+Requirements: Node.js 20 or newer and npm.
+
+1. Create a separate Supabase project for HarborPay. Do not reuse a database belonging to another application.
+2. Run database/migrations/20261029000100_harborpay_core.sql in the HarborPay Supabase SQL editor.
+3. Create a PayPal REST application in the PayPal Developer Dashboard. Start with Sandbox credentials.
+4. Copy server/.env.example to server/.env and fill in the server-only secrets.
+5. Copy web/.env.example to web/.env.local and set the public Supabase URL/key and API URL.
+6. Install dependencies with npm install followed by npm run install:all.
+7. Start the API and web client with npm run dev.
+8. Run npm test before deployment.
+
+The frontend uses the Supabase publishable/anon key. The API uses the Supabase service-role key. Never put a service-role key, PayPal client secret, or webhook secret in the web environment or source control.
+
+## PayPal checkout flow
+
+1. The signed-in customer submits an amount and description.
+2. The API validates the amount and creates a HarborPay payment record.
+3. The API creates a PayPal Orders v2 order and returns the provider approval URL.
+4. The customer approves the transaction on PayPal.
+5. PayPal returns the customer to HarborPay and the API captures the order.
+6. The application marks the payment completed only when PayPal returns a completed capture with the expected amount and currency.
+7. A verified webhook independently reconciles later provider events.
+
+A browser redirect alone is never treated as proof of payment.
+
+## Configuration and release
+
+See docs/OPERATIONS.md for the exact Supabase, PayPal, webhook, Render, and release configuration.
+
+The repository contains integration code, not your private merchant credentials. Real-money activity cannot be activated until your own Supabase project, PayPal app, webhook, merchant review, and live credentials are configured and verified. Sandbox mode is the default. Do not set PayPal to live mode until your merchant account is approved and end-to-end tests pass.

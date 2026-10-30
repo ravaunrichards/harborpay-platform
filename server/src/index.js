@@ -2,37 +2,563 @@ import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
+import rateLimit from "express-rate-limit";
+import { createClient } from "@supabase/supabase-js";
+import { randomUUID } from "node:crypto";
+import {
+  capturePayPalOrder,
+  createPayPalOrder,
+  createPayPalPayout,
+  isPayPalConfigured,
+  isPayPalWebhookConfigured,
+  verifyPayPalWebhook
+} from "./paypal.js";
+import {
+  minorToDecimalString,
+  parseAmountToMinor,
+  validateDescription,
+  validateEmail
+} from "./money.js";
 
 const app = express();
 const port = Number(process.env.PORT || 4000);
-const allowedOrigins = (process.env.WEB_ORIGIN || "http://localhost:5173").split(",").map(s => s.trim());
-app.use(helmet());
-app.use(cors({ origin: (origin, callback) => {
-  if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
-  return callback(new Error("Origin is not allowed by CORS"));
-} }));
-app.use(express.json({ limit: "20kb" }));
+const allowedOrigins = new Set(
+  (process.env.WEB_ORIGIN || "http://localhost:5173")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean)
+);
+let supabaseAdmin = null;
 
-// No synthetic balances or transaction records are returned as account data.
-const transactions = [];
-
-app.get("/api/health", (_req, res) => res.json({ ok: true, service: "harborpay-api", mode: "local-demo" }));
-app.get("/api/wallet", (_req, res) => res.json({
-  mode: "local-demo",
-  notice: "No authenticated account or live financial data is connected.",
-  currency: "USD", availableBalance: null, pendingBalance: null,
-  transactions
+app.set("trust proxy", 1);
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: "cross-origin" }
 }));
-app.get("/api/transactions", (_req, res) => res.json({ mode: "local-demo", items: transactions }));
-app.post("/api/validate-payment-draft", async (req, res) => {
-  try {
-    const { parseMoneyAmount, validateRecipient } = await import("./validation.js");
-    const amount = parseMoneyAmount(req.body?.amount);
-    const recipient = validateRecipient(req.body?.recipient);
-    res.json({ valid: true, draft: { amount, recipient, currency: "USD" }, note: "Validated draft only; no payment was sent." });
-  } catch (error) {
-    res.status(400).json({ valid: false, error: error.message || "Invalid draft." });
+app.use(cors({
+  origin(origin, callback) {
+    if (!origin || allowedOrigins.has(origin)) return callback(null, true);
+    return callback(null, false);
+  },
+  methods: ["GET", "POST", "OPTIONS"],
+  allowedHeaders: ["Authorization", "Content-Type", "Idempotency-Key"]
+}));
+
+function httpError(status, message) {
+  const error = new Error(message);
+  error.status = status;
+  return error;
+}
+
+function asyncRoute(handler) {
+  return (request, response, next) => {
+    Promise.resolve(handler(request, response, next)).catch(next);
+  };
+}
+
+function getIdempotencyKey(request) {
+  const value = String(request.get("Idempotency-Key") || "").trim();
+  if (value.length < 16 || value.length > 128 || !/^[A-Za-z0-9._:-]+$/.test(value)) {
+    throw httpError(400, "A valid Idempotency-Key header is required.");
   }
+  return value;
+}
+
+function getDatabase() {
+  if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    throw httpError(503, "HarborPay database and authentication are not configured.");
+  }
+
+  if (!supabaseAdmin) {
+    supabaseAdmin = createClient(
+      process.env.SUPABASE_URL,
+      process.env.SUPABASE_SERVICE_ROLE_KEY,
+      {
+        auth: {
+          autoRefreshToken: false,
+          persistSession: false,
+          detectSessionInUrl: false
+        }
+      }
+    );
+  }
+
+  return supabaseAdmin;
+}
+
+const requireAuth = asyncRoute(async (request, response, next) => {
+  const authorization = request.headers.authorization || "";
+  const tokenMatch = /^Bearer\s+(.+)$/i.exec(authorization);
+
+  if (!tokenMatch) throw httpError(401, "Sign in to continue.");
+
+  const { data, error } = await getDatabase().auth.getUser(tokenMatch[1]);
+  if (error || !data?.user) throw httpError(401, "Your session is invalid or expired.");
+
+  request.user = data.user;
+  next();
 });
-app.use((_req, res) => res.status(404).json({ error: "Route not found" }));
-app.listen(port, () => console.log(`HarborPay API listening on http://localhost:${port}`));
+
+const apiLimiter = rateLimit({
+  windowMs: 60_000,
+  max: 90,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (request) => request.path === "/health"
+});
+
+app.get("/api/health", (_request, response) => {
+  response.json({
+    ok: true,
+    service: "harborpay-api",
+    configured: {
+      supabase: Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY),
+      paypal: isPayPalConfigured(),
+      paypalWebhook: isPayPalWebhookConfigured(),
+      payoutsEnabled: process.env.PAYPAL_PAYOUTS_ENABLED === "true"
+    },
+    timestamp: new Date().toISOString()
+  });
+});
+
+async function processPayPalEvent(database, event) {
+  const resource = event.resource || {};
+  const eventType = event.event_type;
+
+  if (eventType === "CHECKOUT.ORDER.APPROVED") {
+    if (resource.id) {
+      await database.from("payments")
+        .update({ status: "approved" })
+        .eq("provider_order_id", resource.id)
+        .eq("status", "created");
+    }
+    return;
+  }
+
+  const captureEvents = new Set([
+    "PAYMENT.CAPTURE.COMPLETED",
+    "PAYMENT.CAPTURE.PENDING",
+    "PAYMENT.CAPTURE.DENIED",
+    "PAYMENT.CAPTURE.REFUNDED"
+  ]);
+
+  if (captureEvents.has(eventType)) {
+    const orderId = resource.supplementary_data?.related_ids?.order_id;
+    if (!orderId) return;
+
+    const { data: payment, error: lookupError } = await database.from("payments")
+      .select("id, amount_minor, currency, status")
+      .eq("provider_order_id", orderId)
+      .maybeSingle();
+
+    if (lookupError) throw httpError(503, "Payment reconciliation lookup failed.");
+    if (!payment) return;
+    if (payment.status === "refunded" || payment.status === "review_required") return;
+
+    const providerAmountMinor = Math.round(Number(resource.amount?.value) * 100);
+    const amountMatches = Number.isSafeInteger(providerAmountMinor) &&
+      providerAmountMinor === Number(payment.amount_minor) &&
+      resource.amount?.currency_code === payment.currency;
+
+    let nextStatus = "review_required";
+    if (amountMatches) {
+      if (eventType === "PAYMENT.CAPTURE.COMPLETED") {
+        nextStatus = ["created", "approved", "pending"].includes(payment.status)
+          ? "completed"
+          : "review_required";
+      } else if (eventType === "PAYMENT.CAPTURE.PENDING") {
+        nextStatus = ["created", "approved", "pending"].includes(payment.status)
+          ? "pending"
+          : "review_required";
+      } else if (eventType === "PAYMENT.CAPTURE.DENIED") {
+        nextStatus = ["created", "approved", "pending"].includes(payment.status)
+          ? "failed"
+          : "review_required";
+      } else if (eventType === "PAYMENT.CAPTURE.REFUNDED") {
+        nextStatus = payment.status === "completed" ? "refunded" : "review_required";
+      }
+    }
+
+    const { error: updateError } = await database.from("payments")
+      .update({
+        status: nextStatus,
+        provider_capture_id: resource.id || null
+      })
+      .eq("id", payment.id);
+
+    if (updateError) throw httpError(503, "Payment event could not be reconciled.");
+    return;
+  }
+
+  if (eventType.startsWith("PAYMENT.PAYOUTS-ITEM.")) {
+    const senderItemId = resource.payout_item?.sender_item_id || resource.sender_item_id;
+    if (!senderItemId) return;
+
+    let payoutStatus;
+    if (eventType === "PAYMENT.PAYOUTS-ITEM.SUCCEEDED") payoutStatus = "succeeded";
+    else if (eventType === "PAYMENT.PAYOUTS-ITEM.FAILED") payoutStatus = "failed";
+    else payoutStatus = "requires_review";
+
+    const { error } = await database.from("payouts")
+      .update({
+        status: payoutStatus,
+        provider_item_id: resource.payout_item_id || resource.payout_item?.payout_item_id || null
+      })
+      .eq("provider_sender_item_id", senderItemId);
+
+    if (error) throw httpError(503, "Payout event could not be reconciled.");
+  }
+}
+
+app.post("/api/paypal/webhook", express.raw({ type: "application/json", limit: "256kb" }), asyncRoute(async (request, response) => {
+  if (!Buffer.isBuffer(request.body)) throw httpError(400, "Invalid webhook body.");
+
+  let event;
+  try {
+    event = JSON.parse(request.body.toString("utf8"));
+  } catch {
+    throw httpError(400, "Webhook body is not valid JSON.");
+  }
+
+  if (!event.id || !event.event_type) throw httpError(400, "Webhook event is missing required identifiers.");
+
+  const verified = await verifyPayPalWebhook(request.headers, event);
+  if (!verified) throw httpError(400, "PayPal webhook signature verification failed.");
+
+  const database = getDatabase();
+  const { error: insertError } = await database.from("webhook_events").insert({
+    provider_event_id: event.id,
+    event_type: event.event_type,
+    payload: event
+  });
+
+  if (insertError && insertError.code !== "23505") {
+    throw httpError(503, "Verified webhook could not be recorded. PayPal may retry delivery.");
+  }
+
+  if (insertError?.code === "23505") {
+    const { data: existing, error: lookupError } = await database.from("webhook_events")
+      .select("processed_at")
+      .eq("provider_event_id", event.id)
+      .maybeSingle();
+
+    if (lookupError) throw httpError(503, "Webhook reconciliation status could not be checked.");
+    if (existing?.processed_at) {
+      return response.status(200).json({ received: true, duplicate: true });
+    }
+  }
+
+  await processPayPalEvent(database, event);
+
+  const { error: processedError } = await database.from("webhook_events")
+    .update({ processed_at: new Date().toISOString() })
+    .eq("provider_event_id", event.id);
+
+  if (processedError) {
+    throw httpError(503, "Webhook was received but its processing marker could not be saved.");
+  }
+
+  response.status(200).json({ received: true });
+}));
+
+app.use(express.json({ limit: "32kb" }));
+app.use("/api", apiLimiter);
+
+app.get("/api/payments", requireAuth, asyncRoute(async (request, response) => {
+  const { data, error } = await getDatabase().from("payments")
+    .select("id, amount_minor, currency, description, status, provider_order_id, provider_capture_id, created_at")
+    .eq("user_id", request.user.id)
+    .order("created_at", { ascending: false })
+    .limit(100);
+
+  if (error) throw httpError(503, "Payment history is temporarily unavailable.");
+  response.json({ items: data || [] });
+}));
+
+app.post("/api/payments/orders", requireAuth, asyncRoute(async (request, response) => {
+  if (!isPayPalConfigured()) throw httpError(503, "PayPal checkout is not configured on the server.");
+
+  const currency = (process.env.PAYPAL_CURRENCY || "USD").toUpperCase();
+  if (currency !== "USD") throw httpError(503, "This HarborPay release is configured for USD checkout only.");
+
+  const idempotencyKey = getIdempotencyKey(request);
+  const amountMinor = parseAmountToMinor(request.body?.amount);
+  const amount = minorToDecimalString(amountMinor);
+  const description = validateDescription(request.body?.description);
+  const appUrl = process.env.APP_URL;
+
+  if (!appUrl) throw httpError(503, "HarborPay return and cancel URLs are not configured.");
+
+  let appOrigin;
+  try {
+    appOrigin = new URL(appUrl).origin;
+  } catch {
+    throw httpError(503, "APP_URL must be a valid absolute URL.");
+  }
+
+  const database = getDatabase();
+  const { data: existing, error: existingError } = await database.from("payments")
+    .select("id, status")
+    .eq("user_id", request.user.id)
+    .eq("idempotency_key", idempotencyKey)
+    .maybeSingle();
+
+  if (existingError) throw httpError(503, "The existing payment attempt could not be checked.");
+  if (existing) throw httpError(409, "This payment attempt has already been submitted. Refresh your transaction history before starting another payment.");
+
+  const { data: payment, error: insertError } = await database.from("payments")
+    .insert({
+      user_id: request.user.id,
+      idempotency_key: idempotencyKey,
+      amount_minor: amountMinor,
+      currency,
+      description,
+      status: "created"
+    })
+    .select("id")
+    .single();
+
+  if (insertError || !payment) {
+    if (insertError?.code === "23505") throw httpError(409, "This payment attempt has already been submitted.");
+    throw httpError(503, "The payment could not be recorded.");
+  }
+
+  let providerOrder;
+  try {
+    providerOrder = await createPayPalOrder({
+      paymentId: payment.id,
+      amount,
+      currency,
+      description,
+      returnUrl: appOrigin + "/?payment=return",
+      cancelUrl: appOrigin + "/?payment=cancelled"
+    });
+  } catch (error) {
+    await database.from("payments")
+      .update({ status: "review_required" })
+      .eq("id", payment.id)
+      .eq("user_id", request.user.id);
+    throw error;
+  }
+
+  const approvalUrl = (providerOrder.links || []).find((link) =>
+    link.rel === "approve" || link.rel === "payer-action"
+  )?.href;
+
+  if (!providerOrder.id || !approvalUrl) {
+    await database.from("payments")
+      .update({ status: "review_required" })
+      .eq("id", payment.id)
+      .eq("user_id", request.user.id);
+    throw httpError(502, "PayPal did not return a valid approval URL. The payment has not been reported as successful.");
+  }
+
+  const { error: updateError } = await database.from("payments")
+    .update({ provider_order_id: providerOrder.id })
+    .eq("id", payment.id)
+    .eq("user_id", request.user.id);
+
+  if (updateError) throw httpError(503, "The provider order could not be linked to HarborPay. Contact support before retrying.");
+
+  response.status(201).json({
+    paymentId: payment.id,
+    orderId: providerOrder.id,
+    approvalUrl,
+    status: "created"
+  });
+}));
+
+app.post("/api/payments/capture", requireAuth, asyncRoute(async (request, response) => {
+  const orderId = String(request.body?.orderId || "").trim();
+  if (!orderId || orderId.length > 128) throw httpError(400, "A valid PayPal order ID is required.");
+
+  const database = getDatabase();
+  const { data: payment, error: lookupError } = await database.from("payments")
+    .select("id, amount_minor, currency, status, provider_order_id")
+    .eq("provider_order_id", orderId)
+    .eq("user_id", request.user.id)
+    .maybeSingle();
+
+  if (lookupError) throw httpError(503, "The payment record could not be loaded.");
+  if (!payment) throw httpError(404, "No payment for this PayPal order belongs to your account.");
+  if (payment.status === "completed") {
+    return response.json({ payment, alreadyCompleted: true });
+  }
+  if (["failed", "cancelled", "refunded", "review_required"].includes(payment.status)) {
+    throw httpError(409, "This payment cannot be captured in its current state.");
+  }
+
+  const providerOrder = await capturePayPalOrder(orderId, payment.id);
+  const capture = providerOrder.purchase_units?.[0]?.payments?.captures?.[0];
+
+  if (!capture) throw httpError(502, "PayPal did not return a capture record. Check the PayPal activity before retrying.");
+
+  const providerAmountMinor = Math.round(Number(capture.amount?.value) * 100);
+  const amountMatches = Number.isSafeInteger(providerAmountMinor) &&
+    providerAmountMinor === Number(payment.amount_minor) &&
+    capture.amount?.currency_code === payment.currency;
+
+  let nextStatus = "pending";
+  if (!amountMatches) nextStatus = "review_required";
+  else if (capture.status === "COMPLETED") nextStatus = "completed";
+  else if (capture.status === "DENIED") nextStatus = "failed";
+  else if (capture.status === "PENDING") nextStatus = "pending";
+
+  const { data: updated, error: updateError } = await database.from("payments")
+    .update({
+      status: nextStatus,
+      provider_capture_id: capture.id || null
+    })
+    .eq("id", payment.id)
+    .eq("user_id", request.user.id)
+    .select("id, amount_minor, currency, description, status, provider_order_id, provider_capture_id, created_at")
+    .single();
+
+  if (updateError || !updated) throw httpError(503, "PayPal responded, but the payment record could not be reconciled.");
+
+  response.json({
+    payment: updated,
+    providerStatus: capture.status,
+    amountMatches
+  });
+}));
+
+app.post("/api/payments/cancel", requireAuth, asyncRoute(async (request, response) => {
+  const orderId = String(request.body?.orderId || "").trim();
+  if (!orderId) throw httpError(400, "A PayPal order ID is required.");
+
+  const { data, error } = await getDatabase().from("payments")
+    .update({ status: "cancelled" })
+    .eq("provider_order_id", orderId)
+    .eq("user_id", request.user.id)
+    .in("status", ["created", "approved"])
+    .select("id, status")
+    .maybeSingle();
+
+  if (error) throw httpError(503, "The payment cancellation could not be recorded.");
+  response.json({ payment: data || null });
+}));
+
+app.post("/api/admin/payouts", requireAuth, asyncRoute(async (request, response) => {
+  const adminIds = new Set(
+    (process.env.HARBORPAY_ADMIN_USER_IDS || "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean)
+  );
+
+  if (!adminIds.has(request.user.id)) throw httpError(403, "Administrator access is required.");
+  if (process.env.PAYPAL_PAYOUTS_ENABLED !== "true") {
+    throw httpError(503, "PayPal Payouts are disabled until merchant approval and operational checks are complete.");
+  }
+  if (!isPayPalConfigured()) throw httpError(503, "PayPal server credentials are not configured.");
+
+  const idempotencyKey = getIdempotencyKey(request);
+  const recipientEmail = validateEmail(request.body?.recipientEmail);
+  const amountMinor = parseAmountToMinor(request.body?.amount);
+  const amount = minorToDecimalString(amountMinor);
+  const currency = (process.env.PAYPAL_CURRENCY || "USD").toUpperCase();
+  if (currency !== "USD") throw httpError(503, "Payouts are currently configured for USD only.");
+
+  const database = getDatabase();
+  const { data: existing, error: existingError } = await database.from("payouts")
+    .select("id, status, provider_batch_id")
+    .eq("created_by", request.user.id)
+    .eq("idempotency_key", idempotencyKey)
+    .maybeSingle();
+
+  if (existingError) throw httpError(503, "The previous payout attempt could not be checked.");
+  if (existing) {
+    return response.status(202).json({
+      payoutId: existing.id,
+      status: existing.status,
+      providerBatchId: existing.provider_batch_id,
+      duplicate: true,
+      message: "This payout request already exists. Check PayPal and the payout record before retrying."
+    });
+  }
+
+  const payoutId = randomUUID();
+  const compactId = payoutId.replaceAll("-", "");
+  const senderBatchId = "HP" + compactId.slice(0, 27);
+  const senderItemId = compactId.slice(0, 30);
+
+  const { error: insertError } = await database.from("payouts").insert({
+    id: payoutId,
+    idempotency_key: idempotencyKey,
+    recipient_email: recipientEmail,
+    amount_minor: amountMinor,
+    currency,
+    status: "processing",
+    provider_sender_item_id: senderItemId,
+    created_by: request.user.id
+  });
+
+  if (insertError) {
+    if (insertError.code === "23505") throw httpError(409, "This payout request has already been submitted.");
+    throw httpError(503, "The payout audit record could not be created.");
+  }
+
+  try {
+    const providerResult = await createPayPalPayout({
+      payoutId,
+      senderBatchId,
+      senderItemId,
+      recipientEmail,
+      amount,
+      currency
+    });
+
+    const batchId = providerResult.batch_header?.payout_batch_id || null;
+    const itemId = providerResult.items?.[0]?.payout_item_id || null;
+
+    const { error: updateError } = await database.from("payouts")
+      .update({
+        status: "submitted",
+        provider_batch_id: batchId,
+        provider_item_id: itemId
+      })
+      .eq("id", payoutId);
+
+    if (updateError) {
+      return response.status(202).json({
+        payoutId,
+        status: "requires_reconciliation",
+        message: "PayPal may have accepted the payout. Reconcile the PayPal activity before retrying."
+      });
+    }
+
+    return response.status(202).json({
+      payoutId,
+      status: "submitted",
+      providerBatchId: batchId
+    });
+  } catch {
+    await database.from("payouts")
+      .update({ status: "requires_review" })
+      .eq("id", payoutId);
+
+    return response.status(502).json({
+      payoutId,
+      status: "requires_review",
+      error: "PayPal did not provide a confirmed payout response. Review PayPal activity before retrying to avoid a duplicate payment."
+    });
+  }
+}));
+
+app.use((_request, response) => {
+  response.status(404).json({ error: "Route not found." });
+});
+
+app.use((error, _request, response, _next) => {
+  const status = Number(error.status) || 500;
+  if (status >= 500) {
+    console.error("HarborPay API error:", error.providerIssue || error.message || "Unknown error");
+  }
+  response.status(status).json({
+    error: status >= 500 ? (error.message || "HarborPay service error.") : error.message
+  });
+});
+
+app.listen(port, () => {
+  console.log("HarborPay API listening on port " + port);
+});

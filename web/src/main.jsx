@@ -1,51 +1,432 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { ArrowDownLeft, ArrowUpRight, Bell, ChevronDown, CircleHelp, CreditCard, Download, Eye, EyeOff, Home, Menu, Search, Settings, ShieldCheck, Users, Wallet, X, ArrowLeftRight, Clock3, CheckCircle2 } from "lucide-react";
+import {
+  ArrowDownLeft,
+  ArrowUpRight,
+  CheckCircle2,
+  CircleAlert,
+  CreditCard,
+  History,
+  LogOut,
+  ShieldCheck,
+  Wallet,
+  X
+} from "lucide-react";
+import { supabase, supabaseConfigured } from "./lib/supabase.js";
 import "./styles.css";
 
-const API = import.meta.env.VITE_API_URL || "http://localhost:4000";
-const nav = [{ label: "Overview", icon: Home }, { label: "Activity", icon: ArrowLeftRight }, { label: "Send & Request", icon: ArrowUpRight }, { label: "Wallet", icon: Wallet }, { label: "Contacts", icon: Users }, { label: "Settings", icon: Settings }];
-const money = (n, currency = "USD") => new Intl.NumberFormat("en-US", { style: "currency", currency }).format(n);
-function App() {
-  const [section, setSection] = useState("Overview"); const [hideBalance, setHideBalance] = useState(false); const [menuOpen, setMenuOpen] = useState(false);
-  const [wallet, setWallet] = useState({ availableBalance: null, pendingBalance: null, currency: "USD", transactions: [], mode: "local-demo" });
-  const [apiStatus, setApiStatus] = useState("checking"); const [showSend, setShowSend] = useState(false); const [showRequest, setShowRequest] = useState(false);
-  const [recipient, setRecipient] = useState(""); const [amount, setAmount] = useState(""); const [notice, setNotice] = useState("");
-  useEffect(() => { fetch(`${API}/api/wallet`).then(r => { if (!r.ok) throw new Error(); return r.json(); }).then(data => { setWallet(data); setApiStatus("connected"); }).catch(() => setApiStatus("offline")); }, []);
-  const startPayment = request => { setShowRequest(request); setShowSend(!request); setNotice(""); setRecipient(""); setAmount(""); };
-  async function submitDraft(e) {
-    e.preventDefault(); setNotice("");
-    try { const response = await fetch(`${API}/api/validate-payment-draft`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ recipient, amount }) }); const data = await response.json(); if (!response.ok) throw new Error(data.error || "Could not validate draft."); setNotice(`Draft validated for ${money(data.draft.amount)} to ${data.draft.recipient}. No money was sent.`); }
-    catch (err) { setNotice(err.message || "API unavailable. Start the server and try again."); }
-  }
-  const activeModal = showSend || showRequest;
-  return <div className="app-shell">
-    <aside className={`sidebar ${menuOpen ? "open" : ""}`}><div className="brand"><span className="brand-mark">h</span><span>harbor<span className="brand-light">pay</span></span><button className="mobile-close" onClick={() => setMenuOpen(false)} aria-label="Close menu"><X size={19}/></button></div>
-      <div className="profile-mini"><div className="avatar">JD</div><div><strong>Jamie Davis</strong><small>Personal account</small></div><ChevronDown size={16}/></div><div className="nav-label">YOUR ACCOUNT</div>
-      <nav>{nav.map(({ label, icon: Icon }) => <button key={label} className={`nav-item ${section === label ? "selected" : ""}`} onClick={() => { setSection(label); setMenuOpen(false); }}><Icon size={19}/><span>{label}</span>{label === "Activity" && <span className="nav-dot"/>}</button>)}</nav>
-      <div className="sidebar-bottom"><div className="security-note"><ShieldCheck size={20}/><div><strong>Your security matters</strong><small>Explore account protection</small></div></div><button className="nav-item"><CircleHelp size={19}/><span>Help centre</span></button><div className="side-footer">© 2026 HarborPay<br/>Local development preview</div></div>
-    </aside>
-    {menuOpen && <button className="scrim" aria-label="Close menu" onClick={() => setMenuOpen(false)}/>}
-    <main className="main"><header className="topbar"><button className="icon-btn mobile-menu" aria-label="Open menu" onClick={() => setMenuOpen(true)}><Menu/></button><div className="breadcrumb">Account <span>/</span> <b>{section}</b></div><div className="top-actions"><span className={`api-status ${apiStatus}`}><i/>{apiStatus === "connected" ? "API connected" : apiStatus === "checking" ? "Connecting…" : "Offline preview"}</span><button className="icon-btn" aria-label="Search"><Search size={19}/></button><button className="icon-btn notification" aria-label="Notifications"><Bell size={19}/><i/></button><div className="avatar small">JD</div></div></header>
-      <div className="content"><div className="welcome-row"><div><p className="eyebrow">MONDAY, OCTOBER 19, 2026</p><h1>{section === "Overview" ? "Good evening, Jamie" : section}</h1><p className="subheading">{section === "Overview" ? "Here’s what’s happening with your wallet today." : "Manage your account and payments in one place."}</p></div><button className="outline-btn" onClick={() => setNotice("This local preview does not yet export financial statements.")}><Download size={16}/> Export</button></div>
-      <div className="demo-banner"><span className="banner-icon"><ShieldCheck size={17}/></span><span><strong>Preview mode</strong> — no account is connected. Balances and transaction history stay blank until a secure backend and payment provider are configured.</span></div>
-      <section className="balance-grid"><div className="balance-card"><div className="balance-head"><span>Available balance</span><button className="balance-eye" onClick={() => setHideBalance(!hideBalance)} aria-label={hideBalance ? "Show balance" : "Hide balance"}>{hideBalance ? <Eye size={17}/> : <EyeOff size={17}/>}</button></div><div className="balance-amount">{hideBalance ? "••••••" : wallet.availableBalance == null ? "Not connected" : money(wallet.availableBalance, wallet.currency || "USD")}<span>{wallet.currency || "USD"}</span></div><div className="balance-foot"><span><i/> Account not connected</span><button onClick={() => setSection("Wallet")}>View wallet <span>↗</span></button></div><div className="balance-orbit orbit-one"/><div className="balance-orbit orbit-two"/></div>
-      <div className="stat-card"><div className="stat-icon pending"><Clock3 size={20}/></div><span className="stat-label">Pending activity</span><strong>{hideBalance ? "••••" : money(wallet.pendingBalance || 0, wallet.currency || "USD")}</strong><small>Illustrative pending total</small><div className="stat-rule"/></div>
-      <div className="stat-card"><div className="stat-icon safe"><CheckCircle2 size={20}/></div><span className="stat-label">Account status</span><strong className="status-text">Preview account</strong><small>Verification not connected</small><div className="stat-rule"/></div></section>
-      <section className="quick-actions"><div className="section-heading"><div><h2>Quick actions</h2><p>What would you like to do?</p></div></div><div className="action-grid">
-        <button className="action-card primary-action" onClick={() => startPayment(false)}><span className="action-icon"><ArrowUpRight/></span><strong>Send money</strong><small>Prepare a payment draft</small><span className="action-arrow">↗</span></button>
-        <button className="action-card" onClick={() => startPayment(true)}><span className="action-icon receive"><ArrowDownLeft/></span><strong>Request money</strong><small>Prepare a request draft</small><span className="action-arrow">↗</span></button>
-        <button className="action-card" onClick={() => setSection("Wallet")}><span className="action-icon card"><CreditCard/></span><strong>Link a card</strong><small>Payment methods</small><span className="action-arrow">↗</span></button>
-        <button className="action-card" onClick={() => setSection("Contacts")}><span className="action-icon contact"><Users/></span><strong>Contacts</strong><small>Manage recipients</small><span className="action-arrow">↗</span></button>
-      </div></section>
-      <section className="activity-section"><div className="section-heading"><div><h2>Recent activity</h2><p>Your latest wallet activity</p></div><button className="text-btn" onClick={() => setSection("Activity")}>View all activity <span>→</span></button></div>
-      <div className="activity-card"><div className="activity-head"><span>TRANSACTION</span><span>DATE</span><span>STATUS</span><span className="align-right">AMOUNT</span></div>
-        {(wallet.transactions || []).map((tx, i) => <div className="transaction" key={tx.id || i}><div className="tx-person"><span className={`tx-icon ${tx.type === "received" ? "incoming" : tx.type === "request" ? "requested" : "outgoing"}`}>{tx.type === "received" ? <ArrowDownLeft size={18}/> : tx.type === "request" ? <Clock3 size={18}/> : <ArrowUpRight size={18}/>}</span><span><strong>{tx.name}</strong><small>{tx.detail || "Wallet activity"}</small></span></div><span className="tx-date">Oct {18 - i}, 2026</span><span><em className="status-pill">{tx.status === "sample" ? "Sample" : tx.status || "Pending"}</em></span><strong className={`tx-amount ${tx.amount > 0 ? "positive" : ""}`}>{tx.amount > 0 ? "+" : "−"}{money(Math.abs(tx.amount), tx.currency || "USD")}</strong></div>)}
-        {(!wallet.transactions || !wallet.transactions.length) && <div className="empty-activity">No activity available. Connect the API to load local sample entries.</div>}<div className="activity-disclaimer">All entries shown here are local sample records, not real financial transactions.</div></div></section>
-      <footer className="footer"><span>HarborPay · A separate demo project</span><div><a href="#privacy">Privacy</a><a href="#terms">Terms</a><a href="#security">Security</a></div></footer></div>
-    </main>
-    {activeModal && <div className="modal-backdrop" onClick={() => { setShowSend(false); setShowRequest(false); }}><section className="modal" onClick={e => e.stopPropagation()}><button className="modal-close" onClick={() => { setShowSend(false); setShowRequest(false); }} aria-label="Close"><X/></button><span className="modal-icon">{showRequest ? <ArrowDownLeft/> : <ArrowUpRight/>}</span><h2>{showRequest ? "Request money" : "Prepare a payment"}</h2><p>{showRequest ? "Create a request draft for someone to review." : "Enter the recipient and amount to validate a draft."}</p><form onSubmit={submitDraft}><label>Recipient email<input type="email" value={recipient} onChange={e => setRecipient(e.target.value)} placeholder="name@example.com" required/></label><label>Amount (USD)<div className="amount-input"><span>$</span><input inputMode="decimal" value={amount} onChange={e => setAmount(e.target.value)} placeholder="0.00" required/></div></label><button className="submit-btn" type="submit">Validate {showRequest ? "request" : "payment"} draft</button></form>{notice && <div className="modal-notice">{notice}</div>}<small className="modal-disclaimer">This preview never transfers money or creates a real request.</small></section></div>}
-    {notice && !activeModal && <div className="toast" role="status">{notice}<button onClick={() => setNotice("")} aria-label="Dismiss"><X size={15}/></button></div>}
-  </div>;
+const rawApiUrl = import.meta.env.VITE_API_URL || (import.meta.env.DEV ? "http://localhost:4000" : "");
+const API_URL = rawApiUrl.endsWith("/") ? rawApiUrl.slice(0, -1) : rawApiUrl;
+
+async function apiRequest(path, accessToken, options = {}) {
+  if (!API_URL) throw new Error("The HarborPay API URL is not configured.");
+  const headers = {
+    Accept: "application/json",
+    ...(options.headers || {})
+  };
+  if (accessToken) headers.Authorization = "Bearer " + accessToken;
+  if (options.body) headers["Content-Type"] = "application/json";
+
+  const response = await fetch(API_URL + path, {
+    method: options.method || "GET",
+    headers,
+    body: options.body ? JSON.stringify(options.body) : undefined
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || "HarborPay request failed.");
+  return payload;
 }
-createRoot(document.getElementById("root")).render(<App/>);
+
+function formatMoney(payment) {
+  const amount = Number(payment.amount_minor) / 100;
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: payment.currency || "USD"
+  }).format(amount);
+}
+
+function formatDate(value) {
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short"
+  }).format(new Date(value));
+}
+
+function Brand() {
+  return (
+    <div className="brand">
+      <span className="brand-mark">h</span>
+      <span>harbor<span className="brand-light">pay</span></span>
+    </div>
+  );
+}
+
+function AuthScreen() {
+  const [mode, setMode] = useState("signin");
+  const [fullName, setFullName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [notice, setNotice] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function submit(event) {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      if (mode === "signup") {
+        if (fullName.trim().length < 2) throw new Error("Enter your full name.");
+        const { data, error: authError } = await supabase.auth.signUp({
+          email: email.trim(),
+          password,
+          options: { data: { full_name: fullName.trim() } }
+        });
+        if (authError) throw authError;
+        if (!data.session) {
+          setNotice("Your account request was received. Confirm your email address before signing in.");
+        } else {
+          setNotice("Your HarborPay account is ready.");
+        }
+      } else {
+        const { error: authError } = await supabase.auth.signInWithPassword({
+          email: email.trim(),
+          password
+        });
+        if (authError) throw authError;
+      }
+    } catch (submitError) {
+      setError(submitError.message || "Authentication failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <main className="auth-page">
+      <section className="auth-card">
+        <Brand />
+        <div className="auth-copy">
+          <p className="eyebrow">SECURE PAYMENTS</p>
+          <h1>{mode === "signup" ? "Create your account" : "Welcome back"}</h1>
+          <p>Sign in securely to manage your HarborPay payments.</p>
+        </div>
+        <form className="auth-form" onSubmit={submit}>
+          {mode === "signup" && (
+            <label>
+              Full name
+              <input value={fullName} onChange={(event) => setFullName(event.target.value)} autoComplete="name" required />
+            </label>
+          )}
+          <label>
+            Email address
+            <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" required />
+          </label>
+          <label>
+            Password
+            <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete={mode === "signup" ? "new-password" : "current-password"} minLength={8} required />
+          </label>
+          {error && <p className="message error">{error}</p>}
+          {notice && <p className="message success">{notice}</p>}
+          <button className="primary-button" type="submit" disabled={busy}>
+            {busy ? "Please wait…" : mode === "signup" ? "Create account" : "Sign in"}
+          </button>
+        </form>
+        <button className="link-button" type="button" onClick={() => { setMode(mode === "signup" ? "signin" : "signup"); setError(""); setNotice(""); }}>
+          {mode === "signup" ? "Already registered? Sign in" : "New to HarborPay? Create an account"}
+        </button>
+        <p className="auth-foot"><ShieldCheck size={15} /> Account access is protected by Supabase Auth.</p>
+      </section>
+    </main>
+  );
+}
+
+function SetupScreen() {
+  return (
+    <main className="setup-page">
+      <section className="setup-card">
+        <Brand />
+        <div className="setup-icon"><CircleAlert size={24} /></div>
+        <p className="eyebrow">CONFIGURATION REQUIRED</p>
+        <h1>HarborPay is not connected yet</h1>
+        <p>This deployment has no HarborPay Supabase project keys configured. Account creation and payment actions are intentionally unavailable until the dedicated database and authentication project is connected.</p>
+        <p className="setup-note">No sample account, balance, or transaction history is being displayed.</p>
+        <p className="setup-help">Complete the isolated Supabase and PayPal setup in the repository's operations guide.</p>
+      </section>
+    </main>
+  );
+}
+
+function PaymentModal({ onClose, onSubmit, busy, error }) {
+  const [amount, setAmount] = useState("");
+  const [description, setDescription] = useState("");
+  const [idempotencyKey] = useState(() => crypto.randomUUID());
+
+  function submit(event) {
+    event.preventDefault();
+    onSubmit({ amount, description, idempotencyKey });
+  }
+
+  return (
+    <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+      <section className="payment-modal" role="dialog" aria-modal="true" aria-labelledby="payment-title">
+        <button className="modal-close" type="button" onClick={onClose} aria-label="Close payment form"><X size={20} /></button>
+        <span className="modal-icon"><CreditCard size={21} /></span>
+        <h2 id="payment-title">Make a payment</h2>
+        <p>Continue to PayPal to approve your payment securely. HarborPay does not collect or store card numbers.</p>
+        <form className="payment-form" onSubmit={submit}>
+          <label>
+            Amount (USD)
+            <div className="amount-field"><span>$</span><input inputMode="decimal" placeholder="0.00" value={amount} onChange={(event) => setAmount(event.target.value)} required /></div>
+          </label>
+          <label>
+            Payment description
+            <input maxLength={120} placeholder="What is this payment for?" value={description} onChange={(event) => setDescription(event.target.value)} required />
+          </label>
+          {error && <p className="message error">{error}</p>}
+          <button className="primary-button" type="submit" disabled={busy}>
+            {busy ? "Connecting to PayPal…" : "Continue to PayPal"}
+            <ArrowUpRight size={17} />
+          </button>
+        </form>
+        <p className="modal-foot"><ShieldCheck size={14} /> Payment approval and capture are confirmed by PayPal.</p>
+      </section>
+    </div>
+  );
+}
+
+function App() {
+  const [session, setSession] = useState(null);
+  const [authReady, setAuthReady] = useState(false);
+  const [payments, setPayments] = useState([]);
+  const [paymentsLoading, setPaymentsLoading] = useState(false);
+  const [health, setHealth] = useState(null);
+  const [section, setSection] = useState("Overview");
+  const [showPayment, setShowPayment] = useState(false);
+  const [paymentBusy, setPaymentBusy] = useState(false);
+  const [paymentError, setPaymentError] = useState("");
+  const [notice, setNotice] = useState("");
+  const processedCapture = useRef(false);
+
+  useEffect(() => {
+    if (!supabase) {
+      setAuthReady(true);
+      return undefined;
+    }
+
+    supabase.auth.getSession().then(({ data }) => {
+      setSession(data.session);
+      setAuthReady(true);
+    });
+
+    const { data } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      setSession(nextSession);
+      setAuthReady(true);
+    });
+
+    return () => data.subscription.unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (!API_URL) return undefined;
+    let active = true;
+    fetch(API_URL + "/api/health")
+      .then((response) => response.json())
+      .then((payload) => { if (active) setHealth(payload); })
+      .catch(() => { if (active) setHealth({ ok: false }); });
+    return () => { active = false; };
+  }, []);
+
+  async function loadPayments(accessToken) {
+    setPaymentsLoading(true);
+    try {
+      const result = await apiRequest("/api/payments", accessToken);
+      setPayments(result.items || []);
+    } catch (error) {
+      setNotice(error.message);
+    } finally {
+      setPaymentsLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!session) {
+      setPayments([]);
+      processedCapture.current = false;
+      return;
+    }
+
+    const query = new URLSearchParams(window.location.search);
+    const orderId = query.get("token");
+    const paymentState = query.get("payment");
+
+    if (paymentState === "cancelled") {
+      if (orderId) {
+        apiRequest("/api/payments/cancel", session.access_token, {
+          method: "POST",
+          body: { orderId }
+        }).catch(() => {});
+      }
+      setNotice("The PayPal checkout was cancelled. No completed payment was recorded.");
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+
+    if (orderId && !processedCapture.current && paymentState !== "cancelled") {
+      processedCapture.current = true;
+      apiRequest("/api/payments/capture", session.access_token, {
+        method: "POST",
+        body: { orderId }
+      }).then((result) => {
+        if (result.payment?.status === "completed") {
+          setNotice("PayPal confirmed your payment.");
+        } else if (result.payment?.status === "review_required") {
+          setNotice("PayPal returned details that need manual review. The payment is not shown as completed.");
+        } else {
+          setNotice("PayPal returned the capture status: " + (result.providerStatus || result.payment?.status || "unknown") + ".");
+        }
+        return loadPayments(session.access_token);
+      }).catch((error) => {
+        setNotice(error.message);
+        return loadPayments(session.access_token);
+      }).finally(() => {
+        window.history.replaceState({}, "", window.location.pathname);
+      });
+      return;
+    }
+
+    loadPayments(session.access_token);
+  }, [session]);
+
+  async function createPayment(values) {
+    setPaymentBusy(true);
+    setPaymentError("");
+    try {
+      const { idempotencyKey, ...body } = values;
+      const result = await apiRequest("/api/payments/orders", session.access_token, {
+        method: "POST",
+        headers: { "Idempotency-Key": idempotencyKey },
+        body
+      });
+      window.location.assign(result.approvalUrl);
+    } catch (error) {
+      setPaymentError(error.message);
+      setPaymentBusy(false);
+    }
+  }
+
+  async function signOut() {
+    await supabase.auth.signOut();
+  }
+
+  if (!authReady) {
+    return <main className="loading-page"><div className="loader" /><span>Loading secure account…</span></main>;
+  }
+
+  if (!supabaseConfigured) return <SetupScreen />;
+  if (!session) return <AuthScreen />;
+
+  const completedCount = payments.filter((payment) => payment.status === "completed").length;
+  const pendingCount = payments.filter((payment) => ["created", "approved", "pending"].includes(payment.status)).length;
+
+  return (
+    <div className="app-shell">
+      <aside className="sidebar">
+        <Brand />
+        <div className="account-card">
+          <div className="account-avatar">{(session.user.email || "H").slice(0, 1).toUpperCase()}</div>
+          <div className="account-copy"><strong>{session.user.user_metadata?.full_name || "HarborPay account"}</strong><small>{session.user.email}</small></div>
+        </div>
+        <p className="nav-caption">ACCOUNT</p>
+        <nav className="side-nav">
+          <button className={section === "Overview" ? "active" : ""} onClick={() => setSection("Overview")}><Wallet size={18} /> Overview</button>
+          <button className={section === "Transactions" ? "active" : ""} onClick={() => setSection("Transactions")}><History size={18} /> Transactions</button>
+        </nav>
+        <div className="sidebar-bottom">
+          <div className="security-note"><ShieldCheck size={19} /><span><strong>Provider-secured checkout</strong><small>Payment approval stays on PayPal.</small></span></div>
+          <button className="signout-button" onClick={signOut}><LogOut size={17} /> Sign out</button>
+          <small className="side-legal">HarborPay · Payment records are not stored-value balances.</small>
+        </div>
+      </aside>
+
+      <main className="main">
+        <header className="topbar">
+          <div><span className="crumb">HarborPay</span><span className="crumb-separator">/</span><strong>{section}</strong></div>
+          <div className="topbar-right">
+            <span className={"connection-state " + (health?.configured?.paypal && health?.configured?.supabase ? "ready" : "warning")}>
+              <i /> {health?.configured?.paypal && health?.configured?.supabase ? "Providers configured" : "Setup incomplete"}
+            </span>
+            <div className="user-pill">{session.user.email}</div>
+          </div>
+        </header>
+
+        <div className="page-content">
+          <section className="page-heading">
+            <div>
+              <p className="eyebrow">YOUR PAYMENT SPACE</p>
+              <h1>{section === "Overview" ? "Welcome to HarborPay" : "Your transactions"}</h1>
+              <p>Secure checkout, clear payment records, and real provider status.</p>
+            </div>
+            {section === "Overview" && <button className="primary-button top-pay" onClick={() => { setPaymentError(""); setShowPayment(true); }}>Make a payment <ArrowUpRight size={17} /></button>}
+          </section>
+
+          {notice && <div className="notice-bar"><span>{notice}</span><button onClick={() => setNotice("")} aria-label="Dismiss notice"><X size={16} /></button></div>}
+
+          {section === "Overview" && (
+            <>
+              <section className="balance-grid">
+                <div className="balance-card">
+                  <div className="balance-title"><span>HarborPay stored balance</span><Wallet size={19} /></div>
+                  <strong className="balance-value">Not offered</strong>
+                  <p>Funds are processed by PayPal and settle to the merchant account. HarborPay is not presenting a customer-held wallet balance.</p>
+                </div>
+                <div className="stat-card">
+                  <span className="stat-icon"><CheckCircle2 size={20} /></span>
+                  <small>Completed payments</small>
+                  <strong>{completedCount}</strong>
+                  <span className="stat-foot">Confirmed by PayPal capture</span>
+                </div>
+                <div className="stat-card">
+                  <span className="stat-icon pending"><History size={20} /></span>
+                  <small>Awaiting provider update</small>
+                  <strong>{pendingCount}</strong>
+                  <span className="stat-foot">Not counted as completed</span>
+                </div>
+              </section>
+              <section className="information-panel">
+                <div className="information-icon"><ShieldCheck size={21} /></div>
+                <div><strong>Your payment is handled by PayPal</strong><p>HarborPay sends you to PayPal for approval. A payment is marked completed only after PayPal confirms the capture. Your card details are not entered into HarborPay.</p></div>
+              </section>
+            </>
+          )}
+
+          <section className="activity-section">
+            <div className="section-heading">
+              <div><h2>{section === "Overview" ? "Recent transactions" : "Transaction history"}</h2><p>Records associated with your signed-in account.</p></div>
+              <button className="text-button" onClick={() => loadPayments(session.access_token)} disabled={paymentsLoading}>{paymentsLoading ? "Refreshing…" : "Refresh"} <ArrowDownLeft size={15} /></button>
+            </div>
+            <div className="activity-card">
+              <div className="table-head"><span>PAYMENT</span><span>DATE</span><span>STATUS</span><span className="align-right">AMOUNT</span></div>
+              {paymentsLoading && <div className="empty-state">Loading payment records…</div>}
+              {!paymentsLoading && payments.length === 0 && <div className="empty-state">No payment records found for this account.</div>}
+              {!paymentsLoading && payments.map((payment) => (
+                <div className="transaction-row" key={payment.id}>
+                  <div className="payment-description"><span className="transaction-icon"><CreditCard size={17} /></span><span><strong>{payment.description}</strong><small>PayPal order {payment.provider_order_id || "pending setup"}</small></span></div>
+                  <span className="date-cell">{formatDate(payment.created_at)}</span>
+                  <span><em className={"status-pill " + payment.status}>{payment.status.replaceAll("_", " ")}</em></span>
+                  <strong className="amount-cell">{formatMoney(payment)}</strong>
+                </div>
+              ))}
+              <div className="table-foot">Payment statuses come from PayPal capture responses and verified webhook events.</div>
+            </div>
+          </section>
+          <footer className="app-footer"><span>HarborPay</span><span>Secure payments · No fabricated balances</span></footer>
+        </div>
+      </main>
+
+      {showPayment && <PaymentModal onClose={() => setShowPayment(false)} onSubmit={createPayment} busy={paymentBusy} error={paymentError} />}
+    </div>
+  );
+}
+
+createRoot(document.getElementById("root")).render(<App />);
