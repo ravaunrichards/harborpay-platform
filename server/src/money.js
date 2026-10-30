@@ -1,14 +1,20 @@
+function invalidInput(message) {
+  const error = new Error(message);
+  error.status = 400;
+  return error;
+}
+
 const MAX_AMOUNT_MINOR = 1_000_000;
 
 export function parseAmountToMinor(value, maxMinor = MAX_AMOUNT_MINOR) {
   if ((typeof value !== "string" && typeof value !== "number") || String(value).trim() === "") {
-    throw new Error("Enter an amount greater than zero.");
+    throw invalidInput("Enter an amount greater than zero.");
   }
 
   const raw = String(value).trim();
   const match = /^(0|[1-9]\d{0,7})(?:\.(\d{1,2}))?$/.exec(raw);
   if (!match) {
-    throw new Error("Enter a valid amount with no more than two decimal places.");
+    throw invalidInput("Enter a valid amount with no more than two decimal places.");
   }
 
   const whole = Number(match[1]);
@@ -16,10 +22,10 @@ export function parseAmountToMinor(value, maxMinor = MAX_AMOUNT_MINOR) {
   const minor = whole * 100 + fractional;
 
   if (!Number.isSafeInteger(minor) || minor < 100) {
-    throw new Error("The minimum payment is 1.00.");
+    throw invalidInput("The minimum payment is 1.00.");
   }
   if (minor > maxMinor) {
-    throw new Error("The amount exceeds the HarborPay transaction limit.");
+    throw invalidInput("The amount exceeds the HarborPay transaction limit.");
   }
 
   return minor;
@@ -28,7 +34,7 @@ export function parseAmountToMinor(value, maxMinor = MAX_AMOUNT_MINOR) {
 export function minorToDecimalString(value) {
   const minor = Number(value);
   if (!Number.isSafeInteger(minor) || minor < 0) {
-    throw new Error("Invalid minor-unit amount.");
+    throw invalidInput("Invalid minor-unit amount.");
   }
   return (minor / 100).toFixed(2);
 }
@@ -36,7 +42,7 @@ export function minorToDecimalString(value) {
 export function validateEmail(value) {
   const email = String(value ?? "").trim().toLowerCase();
   if (email.length < 6 || email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    throw new Error("Enter a valid recipient email address.");
+    throw invalidInput("Enter a valid recipient email address.");
   }
   return email;
 }
@@ -44,7 +50,7 @@ export function validateEmail(value) {
 export function validateDescription(value) {
   const description = String(value ?? "").trim();
   if (description.length < 3 || description.length > 120) {
-    throw new Error("Description must contain between 3 and 120 characters.");
+    throw invalidInput("Description must contain between 3 and 120 characters.");
   }
   return description;
 }

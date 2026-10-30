@@ -1,7 +1,7 @@
 {
   "project": "HarborPay",
   "version": "1.0.0",
-  "status": "Expanded database migrations and schema verification are in GitHub; the isolated live HarborPay database still requires dedicated provider provisioning.",
+  "status": "Database migrations and PostgreSQL security CI are passing. Merchant account, customer, order, and payment-link record APIs are implemented with server-side role checks. Public merchant checkout remains disabled.",
   "generated_files": [
     ".gitignore",
     "PROJECT_MANIFEST.json",
@@ -30,7 +30,9 @@
     "database/tests/supabase_bootstrap.sql",
     "database/tests/verify_schema.sql",
     "database/verify.sql",
-    "docs/DATABASE.md"
+    "docs/DATABASE.md",
+    "server/src/merchant.js",
+    "server/test/merchant.test.js"
   ],
   "integrations": [
     "Supabase Auth",

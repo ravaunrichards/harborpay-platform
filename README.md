@@ -12,6 +12,15 @@ HarborPay is a payment application built around real provider transactions. The 
 - A customer transaction history that reads only records belonging to the signed-in user.
 - PostgreSQL migration/RLS/webhook tests, API tests, and a production build check.
 
+## Merchant API
+
+- `GET/POST /api/merchants` — list merchant memberships and create a draft merchant account.
+- `GET/POST /api/merchants/:merchantId/customers` — manage merchant customer records.
+- `GET/POST /api/merchants/:merchantId/orders` — manage merchant order records. Creating an order does not mean it has been paid.
+- `GET/POST /api/merchants/:merchantId/payment-links` — create and list payment-link records. Public checkout is not yet activated.
+
+Every merchant resource request checks the caller's merchant membership and role in the API. The API service role bypasses database RLS, so server-side authorization is mandatory. Payment links are records only until a merchant-specific public checkout flow is implemented and tested.
+
 ## Important product boundary
 
 This release is a PayPal checkout and controlled-disbursement integration. It does **not** claim to be a licensed stored-value wallet, does not hold customer funds in an internal HarborPay balance, and does not display a pretend available balance. Checkout payments settle to the merchant's PayPal account. Payouts are disbursements from that merchant account and are disabled until the PayPal account has Payouts access and an administrator explicitly enables the feature.

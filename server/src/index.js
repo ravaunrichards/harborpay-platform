@@ -19,6 +19,12 @@ import {
   validateDescription,
   validateEmail
 } from "./money.js";
+import {
+  validateMerchantName,
+  validateOrderReference,
+  validatePaymentLinkTitle,
+  validateOptionalUrl
+} from "./merchant.js";
 
 const app = express();
 const port = Number(process.env.PORT || 4000);
@@ -458,6 +464,217 @@ app.post("/api/payments/cancel", requireAuth, asyncRoute(async (request, respons
 
   if (error) throw httpError(503, "The payment cancellation could not be recorded.");
   response.json({ payment: data || null });
+}));
+
+
+function validateUuid(value, label) {
+  const candidate = String(value || "");
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(candidate)) {
+    throw httpError(400, "A valid " + label + " is required.");
+  }
+  return candidate;
+}
+
+async function requireMerchantRole(database, merchantId, userId, allowedRoles) {
+  validateUuid(merchantId, "merchant ID");
+  const { data, error } = await database.from("merchant_members")
+    .select("role")
+    .eq("merchant_id", merchantId)
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (error) throw httpError(503, "Merchant permissions could not be checked.");
+  if (!data || !allowedRoles.includes(data.role)) {
+    throw httpError(403, "You do not have permission to access this merchant resource.");
+  }
+  return data.role;
+}
+
+app.get("/api/merchants", requireAuth, asyncRoute(async (request, response) => {
+  const database = getDatabase();
+  const { data: memberships, error: membershipError } = await database.from("merchant_members")
+    .select("merchant_id, role")
+    .eq("user_id", request.user.id);
+
+  if (membershipError) throw httpError(503, "Merchant accounts could not be loaded.");
+  if (!memberships?.length) return response.json({ items: [] });
+
+  const ids = memberships.map((item) => item.merchant_id);
+  const { data: merchants, error } = await database.from("merchant_accounts")
+    .select("id, display_name, legal_name, country_code, settlement_currency, business_email, website_url, status, payouts_enabled, created_at")
+    .in("id", ids)
+    .order("created_at", { ascending: false });
+
+  if (error) throw httpError(503, "Merchant accounts could not be loaded.");
+  const roles = new Map(memberships.map((item) => [item.merchant_id, item.role]));
+  response.json({ items: (merchants || []).map((merchant) => ({ ...merchant, role: roles.get(merchant.id) })) });
+}));
+
+app.post("/api/merchants", requireAuth, asyncRoute(async (request, response) => {
+  const displayName = validateMerchantName(request.body?.displayName);
+  const businessEmail = request.body?.businessEmail ? validateEmail(request.body.businessEmail) : null;
+  const websiteUrl = validateOptionalUrl(request.body?.websiteUrl);
+  const { data, error } = await getDatabase().from("merchant_accounts")
+    .insert({
+      owner_user_id: request.user.id,
+      display_name: displayName,
+      business_email: businessEmail,
+      website_url: websiteUrl,
+      country_code: "JM",
+      settlement_currency: "USD",
+      status: "draft"
+    })
+    .select("id, display_name, status, country_code, settlement_currency, created_at")
+    .single();
+
+  if (error || !data) throw httpError(503, "Merchant account could not be created.");
+  response.status(201).json({ merchant: { ...data, role: "owner" } });
+}));
+
+app.get("/api/merchants/:merchantId/customers", requireAuth, asyncRoute(async (request, response) => {
+  const database = getDatabase();
+  await requireMerchantRole(database, request.params.merchantId, request.user.id, ["owner", "admin", "finance", "support"]);
+  const { data, error } = await database.from("merchant_customers")
+    .select("id, email, full_name, phone_e164, country_code, external_reference, created_at")
+    .eq("merchant_id", request.params.merchantId)
+    .order("created_at", { ascending: false })
+    .limit(100);
+  if (error) throw httpError(503, "Merchant customers could not be loaded.");
+  response.json({ items: data || [] });
+}));
+
+app.post("/api/merchants/:merchantId/customers", requireAuth, asyncRoute(async (request, response) => {
+  const database = getDatabase();
+  await requireMerchantRole(database, request.params.merchantId, request.user.id, ["owner", "admin", "finance", "support"]);
+  const email = validateEmail(request.body?.email);
+  const fullName = request.body?.fullName == null ? null : String(request.body.fullName).trim().slice(0, 120);
+  const phoneE164 = request.body?.phoneE164 == null || request.body.phoneE164 === ""
+    ? null
+    : String(request.body.phoneE164).trim();
+  if (phoneE164 && !/^\\+[1-9]\\d{7,14}$/.test(phoneE164)) {
+    throw httpError(400, "Phone number must use international E.164 format.");
+  }
+  const countryCode = request.body?.countryCode == null || request.body.countryCode === ""
+    ? null
+    : String(request.body.countryCode).trim().toUpperCase();
+  if (countryCode && !/^[A-Z]{2}$/.test(countryCode)) {
+    throw httpError(400, "Country code must be a two-letter ISO code.");
+  }
+  const externalReference = request.body?.externalReference == null || request.body.externalReference === ""
+    ? null
+    : String(request.body.externalReference).trim().slice(0, 120);
+  const { data, error } = await database.from("merchant_customers")
+    .insert({
+      merchant_id: request.params.merchantId,
+      email,
+      full_name: fullName || null,
+      phone_e164: phoneE164,
+      country_code: countryCode,
+      external_reference: externalReference
+    })
+    .select("id, email, full_name, phone_e164, country_code, external_reference, created_at")
+    .single();
+  if (error || !data) throw httpError(503, "Merchant customer could not be created.");
+  response.status(201).json({ customer: data });
+}));
+
+app.get("/api/merchants/:merchantId/orders", requireAuth, asyncRoute(async (request, response) => {
+  const database = getDatabase();
+  await requireMerchantRole(database, request.params.merchantId, request.user.id, ["owner", "admin", "finance", "support", "viewer"]);
+  const { data, error } = await database.from("orders")
+    .select("id, customer_id, order_reference, amount_minor, currency, description, status, idempotency_key, created_at, updated_at")
+    .eq("merchant_id", request.params.merchantId)
+    .order("created_at", { ascending: false })
+    .limit(100);
+  if (error) throw httpError(503, "Merchant orders could not be loaded.");
+  response.json({ items: data || [] });
+}));
+
+app.post("/api/merchants/:merchantId/orders", requireAuth, asyncRoute(async (request, response) => {
+  const database = getDatabase();
+  await requireMerchantRole(database, request.params.merchantId, request.user.id, ["owner", "admin", "finance"]);
+  const idempotencyKey = getIdempotencyKey(request);
+  const amountMinor = parseAmountToMinor(request.body?.amount);
+  const description = validateDescription(request.body?.description);
+  const orderReference = request.body?.orderReference
+    ? validateOrderReference(request.body.orderReference)
+    : "HP-" + randomUUID().slice(0, 8).toUpperCase();
+  const customerId = request.body?.customerId ? validateUuid(request.body.customerId, "customer ID") : null;
+
+  if (customerId) {
+    const { data: customer, error: customerError } = await database.from("merchant_customers")
+      .select("id")
+      .eq("id", customerId)
+      .eq("merchant_id", request.params.merchantId)
+      .maybeSingle();
+    if (customerError) throw httpError(503, "Customer ownership could not be verified.");
+    if (!customer) throw httpError(404, "The customer does not belong to this merchant.");
+  }
+
+  const { data, error } = await database.from("orders")
+    .insert({
+      merchant_id: request.params.merchantId,
+      customer_id: customerId,
+      order_reference: orderReference,
+      amount_minor: amountMinor,
+      currency: "USD",
+      description,
+      idempotency_key: idempotencyKey
+    })
+    .select("id, customer_id, order_reference, amount_minor, currency, description, status, created_at")
+    .single();
+
+  if (error) {
+    if (error.code === "23505") throw httpError(409, "That order reference or idempotency key already exists.");
+    throw httpError(503, "Merchant order could not be created.");
+  }
+  response.status(201).json({ order: data, paymentStatus: "not_started" });
+}));
+
+app.get("/api/merchants/:merchantId/payment-links", requireAuth, asyncRoute(async (request, response) => {
+  const database = getDatabase();
+  await requireMerchantRole(database, request.params.merchantId, request.user.id, ["owner", "admin", "finance", "viewer"]);
+  const { data, error } = await database.from("payment_links")
+    .select("id, slug, title, description, amount_minor, currency, status, expires_at, max_uses, use_count, created_at")
+    .eq("merchant_id", request.params.merchantId)
+    .order("created_at", { ascending: false })
+    .limit(100);
+  if (error) throw httpError(503, "Payment links could not be loaded.");
+  response.json({ items: data || [] });
+}));
+
+app.post("/api/merchants/:merchantId/payment-links", requireAuth, asyncRoute(async (request, response) => {
+  const database = getDatabase();
+  await requireMerchantRole(database, request.params.merchantId, request.user.id, ["owner", "admin"]);
+  const title = validatePaymentLinkTitle(request.body?.title);
+  const description = request.body?.description == null ? null : validateDescription(request.body.description);
+  const amountMinor = request.body?.amount == null || request.body.amount === ""
+    ? null
+    : parseAmountToMinor(request.body.amount);
+  const maxUses = request.body?.maxUses == null ? null : Number(request.body.maxUses);
+  if (maxUses !== null && (!Number.isSafeInteger(maxUses) || maxUses < 1 || maxUses > 1000000)) {
+    throw httpError(400, "Maximum uses must be a positive whole number.");
+  }
+  const slug = randomUUID().replaceAll("-", "").slice(0, 24);
+  const { data, error } = await database.from("payment_links")
+    .insert({
+      merchant_id: request.params.merchantId,
+      created_by: request.user.id,
+      slug,
+      title,
+      description,
+      amount_minor: amountMinor,
+      currency: "USD",
+      max_uses: maxUses
+    })
+    .select("id, slug, title, description, amount_minor, currency, status, expires_at, max_uses, use_count, created_at")
+    .single();
+  if (error || !data) throw httpError(503, "Payment link could not be created.");
+  response.status(201).json({
+    paymentLink: data,
+    checkoutAvailable: false,
+    message: "The payment link is recorded. Public checkout activation requires the merchant PayPal onboarding and checkout flow."
+  });
 }));
 
 app.post("/api/admin/payouts", requireAuth, asyncRoute(async (request, response) => {

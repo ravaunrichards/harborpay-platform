@@ -52,6 +52,7 @@ jobs:
         with:
           node-version: 20
       - run: npm --prefix server install --no-audit --no-fund
+      - run: node --check server/src/index.js
       - run: npm --prefix server test
 
   web-build:

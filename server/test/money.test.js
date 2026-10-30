@@ -16,18 +16,18 @@ test("converts decimal amounts into integer minor units", () => {
 
 test("rejects zero, negative, malformed, and excessive amounts", () => {
   for (const value of ["0", "-1", "1.234", "1,000", "abc", ""]) {
-    assert.throws(() => parseAmountToMinor(value));
+    assert.throws(() => parseAmountToMinor(value), (error) => error.status === 400);
   }
-  assert.throws(() => parseAmountToMinor("10001.00"));
+  assert.throws(() => parseAmountToMinor("10001.00"), (error) => error.status === 400);
 });
 
 test("normalizes and validates email addresses", () => {
   assert.equal(validateEmail(" USER@example.com "), "user@example.com");
-  assert.throws(() => validateEmail("not-an-email"));
+  assert.throws(() => validateEmail("not-an-email"), (error) => error.status === 400);
 });
 
 test("requires a meaningful bounded payment description", () => {
   assert.equal(validateDescription("Service invoice"), "Service invoice");
-  assert.throws(() => validateDescription("x"));
-  assert.throws(() => validateDescription("x".repeat(121)));
+  assert.throws(() => validateDescription("x"), (error) => error.status === 400);
+  assert.throws(() => validateDescription("x".repeat(121)), (error) => error.status === 400);
 });

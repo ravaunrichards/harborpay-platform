@@ -67,7 +67,11 @@ Set these on the HarborPay static web service:
 
 The API service and static site are separate Render services. Never set SUPABASE_SERVICE_ROLE_KEY, PAYPAL_CLIENT_SECRET, or PAYPAL_WEBHOOK_ID on the static site.
 
-## 5. Payout controls
+## 5. Merchant API surface
+
+The API supports authenticated merchant account creation/listing, merchant customer records, merchant order records, and payment-link records. Merchant routes enforce owner/admin/finance/support/viewer roles server-side before using the privileged database client. Order creation returns `paymentStatus: not_started`; it does not collect funds. Payment links are not public checkout URLs yet. The public merchant checkout, merchant onboarding/KYC, settlement and refund workflows must be implemented and tested before these records can be used to represent customer payments.
+
+## 6. Payout controls
 
 PayPal lists Jamaica as a country with the "Send, receive, and withdraw" Payouts feature set. This does not automatically grant Payouts API access to a new merchant account. Confirm access with PayPal before using the endpoint.
 
@@ -75,7 +79,7 @@ Payouts are disabled by default. To enable them, first complete merchant onboard
 
 The endpoint is POST /api/admin/payouts. It is not a customer wallet withdrawal endpoint and does not promise or calculate a customer's HarborPay balance. It sends money from the merchant's PayPal business account to an email recipient. Review the merchant's legal, contractual, tax, AML, fraud, and consumer-protection duties before enabling it.
 
-## 6. Jamaica regulatory boundary
+## 7. Jamaica regulatory boundary
 
 The Bank of Jamaica describes Payment Service Providers as entities authorized to provide electronic retail payment instruments and services. Its current public PSP page says it is working on amendments to establish a PSP licensing/supervision regime and identifies the FinTech Regulatory Sandbox as the interim controlled testing route. The Bank also publishes a separate remittance licensing framework.
 
@@ -86,7 +90,7 @@ References:
 
 This repository does not establish HarborPay's legal authorization. Do not offer public stored-value accounts, custodial balances, money transmission, or remittance services until a qualified Jamaican regulatory/legal review confirms the operating model and required approvals or regulated partners.
 
-## 7. Sandbox verification checklist
+## 8. Sandbox verification checklist
 
 1. Register a new HarborPay test user.
 2. Confirm the user is created in the HarborPay Supabase Auth project and the profile trigger creates their profile.
